@@ -24,7 +24,7 @@
   <section class="intro">
     <h1>去噪中的 Token 空间轨迹</h1>
     <p class="merge-only">沿时间步观察位置预测，再把 Morton 序列映射回三维点云，查看排序邻域和实际合并组。</p>
-    <p class="native-only">拖动时间轴，观察 Native DiT 每一步对 4,096 个 token 的三维位置预测。</p>
+    <p class="native-only">位置头读取 Native DiT 每一步估计的干净 latent，输出 4,096 个 token 的三维坐标。</p>
   </section>
   <main>
     <section class="panel viewer-panel">

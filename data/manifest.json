@@ -10,6 +10,10 @@
     {
       "name": "object-22",
       "trajectory": "./data/native-case-2.json"
+    },
+    {
+      "name": "鹿人 · test-01",
+      "trajectory": "./data/native-case-3.json"
     }
   ]
 }
