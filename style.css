@@ -33,6 +33,13 @@ header {
   line-height: 1.55;
 }
 
+.demo-note {
+  display: block;
+  margin-top: 6px;
+  color: #57657b;
+  font-size: .85rem;
+}
+
 .panel, .panel-title, .info-section {
   border-color: #dfe6f2;
 }
