@@ -23,7 +23,7 @@ const light = new THREE.DirectionalLight(0xffffff, 2);
 light.position.set(3, 4, 6);
 scene.add(light);
 if (!nativeOnly) scene.add(new THREE.AxesHelper(0.16));
-if (nativeOnly) $("point-size").value = "2";
+if (nativeOnly) $("point-size").value = "3";
 
 let trace = null;
 let frames = [];
@@ -36,6 +36,7 @@ let pointCloud = null;
 let representativeCloud = null;
 let selectedLines = null;
 let meshObject = null;
+let meshDepthObject = null;
 let meshObjectURL = null;
 let autoplay = null;
 let radius = 0.012;
@@ -51,7 +52,20 @@ const defaultTarget = new THREE.Vector3();
 const gradient = [0x243caa, 0x405ed9, 0x248bc1, 0x10a987, 0x80bf43, 0xeaa527]
   .map(hex => new THREE.Color(hex));
 const dimmed = new THREE.Color("#abaeaf");
-const plainPoint = new THREE.Color("#506e9b");
+const plainPoint = new THREE.Color(nativeOnly ? "#315b92" : "#506e9b");
+const surfaceAllowance = { value: 0 };
+const meshDepthMaterial = new THREE.MeshBasicMaterial({ colorWrite: false });
+meshDepthMaterial.onBeforeCompile = shader => {
+  // Move only the depth pass along the viewing ray to keep a thin shell
+  // of predictions visible on and just behind the triangulated surface.
+  shader.uniforms.surfaceAllowance = surfaceAllowance;
+  shader.vertexShader = "uniform float surfaceAllowance;\n" + shader.vertexShader.replace(
+    "#include <project_vertex>",
+    `#include <project_vertex>
+     mvPosition.xyz += normalize(mvPosition.xyz) * surfaceAllowance;
+     gl_Position = projectionMatrix * mvPosition;`
+  );
+};
 
 function status(message, isError = false) {
   $("status").textContent = message;
@@ -367,7 +381,6 @@ function drawFrame() {
   updateMetrics(frame, snap, note);
   $("step-slider").value = frameIndex;
   $("step-select").value = String(frameIndex);
-  if (meshObject) meshObject.visible = $("show-mesh").checked;
 }
 
 async function loadTrace(input, name) {
@@ -421,27 +434,57 @@ function changeFrame(index) {
   drawFrame();
 }
 
-async function loadMesh(url) {
+function syncMeshVisibility() {
+  const showMesh = Boolean(meshObject) && $("show-mesh").checked;
+  $("show-mesh").disabled = !meshObject;
+  $("show-all-points").disabled = !showMesh;
+  if (meshObject) meshObject.visible = showMesh;
+  if (meshDepthObject) meshDepthObject.visible = showMesh && !$("show-all-points").checked;
+}
+
+function replaceMesh(nextMesh) {
+  if (meshDepthObject) scene.remove(meshDepthObject);
+  meshDepthObject = null;
   if (meshObject) {
     scene.remove(meshObject);
+    const geometries = new Set();
+    const materials = new Set();
     meshObject.traverse(obj => {
-      if (obj.isMesh && obj.material) obj.material.dispose();
+      if (!obj.isMesh) return;
+      geometries.add(obj.geometry);
+      materials.add(obj.material);
     });
+    geometries.forEach(geometry => geometry.dispose());
+    materials.forEach(material => material.dispose());
   }
-  meshObject = null;
-  const gltf = await new GLTFLoader().loadAsync(url);
-  meshObject = gltf.scene;
-  meshObject.traverse(obj => {
-    if (obj.isMesh) {
-      obj.material = new THREE.MeshStandardMaterial({
-        color: 0xccc4b9, roughness: 0.86, metalness: 0,
-        transparent: true, opacity: 0.35, side: THREE.DoubleSide,
-        depthWrite: false
-      });
-    }
+  meshObject = nextMesh;
+  if (!meshObject) {
+    syncMeshVisibility();
+    return;
+  }
+  const meshMaterial = new THREE.MeshStandardMaterial({
+    color: nativeOnly ? 0xb8c9de : 0xccc4b9,
+    roughness: 0.86, metalness: 0, transparent: true,
+    opacity: nativeOnly ? 0.25 : 0.35,
+    side: nativeOnly ? THREE.FrontSide : THREE.DoubleSide,
+    depthWrite: false,
   });
-  meshObject.visible = $("show-mesh").checked;
+  meshObject.traverse(obj => {
+    if (obj.isMesh) obj.material = meshMaterial;
+  });
+  if (nativeOnly) {
+    const span = new THREE.Box3().setFromObject(meshObject).getSize(new THREE.Vector3());
+    surfaceAllowance.value = 0.015 * Math.max(span.x, span.y, span.z);
+    meshDepthObject = meshObject.clone();
+    meshDepthObject.traverse(obj => {
+      if (!obj.isMesh) return;
+      obj.material = meshDepthMaterial;
+      obj.renderOrder = -1;
+    });
+    scene.add(meshDepthObject);
+  }
   scene.add(meshObject);
+  syncMeshVisibility();
 }
 
 $("trajectory-file").addEventListener("change", async event => {
@@ -455,7 +498,10 @@ $("mesh-file").addEventListener("change", async event => {
   if (!file) return;
   if (meshObjectURL) URL.revokeObjectURL(meshObjectURL);
   meshObjectURL = URL.createObjectURL(file);
-  try { await loadMesh(meshObjectURL); status("已加载参考 Mesh。"); }
+  try {
+    replaceMesh((await new GLTFLoader().loadAsync(meshObjectURL)).scene);
+    status("已加载参考网格。");
+  }
   catch (err) { status("Mesh 读取失败：" + err.message, true); }
 });
 $("step-slider").addEventListener("input", e => { stopPlayback(); changeFrame(Number(e.target.value)); });
@@ -472,9 +518,10 @@ $("order-strip").addEventListener("click", event => {
   selectedStripe = selectedStripe === stripe ? null : stripe;
   drawFrame();
 });
-for (const key of ["show-tokens", "show-reps", "show-mesh", "show-lines", "only-group", "point-size"]) {
+for (const key of ["show-tokens", "show-reps", "show-lines", "only-group", "point-size"]) {
   $(key).addEventListener("input", drawFrame);
 }
+for (const key of ["show-mesh", "show-all-points"]) $(key).addEventListener("change", syncMeshVisibility);
 $("auto-rotate").addEventListener("change", e => { controls.autoRotate = e.target.checked; });
 $("play").addEventListener("click", () => {
   if (!trace) return;
@@ -537,7 +584,11 @@ renderer.domElement.addEventListener("pointerup", event => {
   pointer.set(((event.clientX - rect.left) / rect.width) * 2 - 1,
               -((event.clientY - rect.top) / rect.height) * 2 + 1);
   raycaster.setFromCamera(pointer, camera);
-  const hit = raycaster.intersectObject(pointCloud, false)[0];
+  let hit = raycaster.intersectObject(pointCloud, false)[0];
+  if (hit && meshDepthObject?.visible) {
+    const surface = raycaster.intersectObject(meshObject, true)[0];
+    if (surface && hit.distance > surface.distance + surfaceAllowance.value) hit = null;
+  }
   stopPlayback();
   selectedStripe = null;
   selectedToken = hit && hit.instanceId != null ? hit.instanceId : null;
@@ -561,9 +612,15 @@ function animate() {
 animate();
 
 async function loadBundledTrace(entry) {
-  const response = await fetch(entry.trajectory, { cache: "no-cache" });
-  if (!response.ok) throw new Error("轨迹文件 HTTP " + response.status);
-  await loadTrace(await response.json(), entry.name || "Research case");
+  const trajectory = fetch(entry.trajectory, { cache: "no-cache" }).then(response => {
+    if (!response.ok) throw new Error("轨迹文件 HTTP " + response.status);
+    return response.json();
+  });
+  const reference = entry.mesh ? new GLTFLoader().loadAsync(entry.mesh).catch(error => error) : null;
+  const [payload, mesh] = await Promise.all([trajectory, reference]);
+  await loadTrace(payload, entry.name || "Research case");
+  replaceMesh(mesh?.scene ?? null);
+  if (mesh instanceof Error) status("位置轨迹已加载，参考网格读取失败。", true);
 }
 
 (async () => {
@@ -591,10 +648,6 @@ async function loadBundledTrace(entry) {
           picker.disabled = false;
         }
       });
-    }
-    if (!nativeOnly && manifest.mesh) {
-      try { await loadMesh(manifest.mesh); }
-      catch (err) { status("轨迹已加载，但参考 Mesh 加载失败：" + err.message, true); }
     }
   } catch (err) {
     status(nativeOnly ? "位置轨迹读取失败：" + err.message :

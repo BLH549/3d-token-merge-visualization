@@ -61,7 +61,8 @@
         <div class="control-row wrap">
           <label class="merge-only"><input type="checkbox" id="show-tokens" checked> 原始 token</label>
           <label class="merge-only"><input type="checkbox" id="show-reps"> 代表 token</label>
-          <label class="merge-only"><input type="checkbox" id="show-mesh" checked> 最终 Mesh</label>
+          <label><input type="checkbox" id="show-mesh" checked disabled> 最终网格（半透明）</label>
+          <label class="native-only"><input type="checkbox" id="show-all-points" disabled> 显示全部点</label>
           <label class="merge-only"><input type="checkbox" id="show-lines" checked> 选中组合并连线</label>
           <label class="merge-only"><input type="checkbox" id="only-group"> 仅显示选中组</label>
           <label><input type="checkbox" id="auto-rotate"> 自动旋转</label>
@@ -74,7 +75,7 @@
       <div class="metrics">
         <div><small>去噪 Step</small><strong id="stat-step">—</strong></div>
         <div class="merge-only"><small>DiT Layer</small><strong id="stat-layer">—</strong></div>
-        <div><small>Token 数</small><strong id="stat-n">—</strong></div>
+        <div><small>预测 Token 数</small><strong id="stat-n">—</strong></div>
         <div class="merge-only"><small>合并后 K</small><strong id="stat-k">—</strong></div>
       </div>
       <div class="info-section merge-only"><h3>当前分组</h3><p id="plan-info" class="muted">导入记录后查看</p></div>

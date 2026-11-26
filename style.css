@@ -90,12 +90,8 @@ header {
   border-bottom: 1px solid #e1e6f0;
 }
 
-.native-only, body[data-view="native"] .merge-only, #case-picker[hidden] {
+body:not([data-view="native"]) .native-only, body[data-view="native"] .merge-only, #case-picker[hidden] {
   display: none;
-}
-
-body[data-view="native"] .native-only {
-  display: revert;
 }
 
 .order-heading, .order-ends {
