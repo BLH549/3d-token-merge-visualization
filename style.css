@@ -64,6 +64,18 @@ header {
   flex-wrap: wrap;
 }
 
+.timeline {
+  padding-block: 10px 9px;
+}
+
+.timeline .control-row {
+  margin-bottom: 4px;
+}
+
+.timeline #step-slider {
+  margin: 0;
+}
+
 .control-row button:first-child {
   background: #284890;
   border-color: #284890;

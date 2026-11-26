@@ -31,14 +31,7 @@
         <div><strong id="case-title">导入轨迹以开始</strong></div>
         <span id="method-label"></span>
       </div>
-      <div id="scene"></div>
-      <div id="order-panel" class="order-panel" hidden>
-        <div class="order-heading"><strong>Morton 序列</strong><span id="order-source"></span></div>
-        <canvas id="order-strip" role="img" aria-label="Morton 排序渐变"></canvas>
-        <div class="order-ends"><span>首位</span><span>末位</span></div>
-        <p id="order-selection"></p>
-      </div>
-      <div class="controls">
+      <div class="controls timeline">
         <div class="control-row">
           <button id="play">▶ 播放</button>
           <button id="reset">↺ 重置视角</button>
@@ -53,7 +46,16 @@
             <option value="group">实际合并组</option>
           </select></label>
         </div>
-        <input type="range" id="step-slider" min="0" max="49" value="0">
+        <input type="range" id="step-slider" min="0" max="49" value="0" aria-label="去噪步时间轴">
+      </div>
+      <div id="scene"></div>
+      <div id="order-panel" class="order-panel" hidden>
+        <div class="order-heading"><strong>Morton 序列</strong><span id="order-source"></span></div>
+        <canvas id="order-strip" role="img" aria-label="Morton 排序渐变"></canvas>
+        <div class="order-ends"><span>首位</span><span>末位</span></div>
+        <p id="order-selection"></p>
+      </div>
+      <div class="controls">
         <div class="control-row wrap">
           <label><input type="checkbox" id="show-tokens" checked> 原始 token</label>
           <label><input type="checkbox" id="show-reps"> 代表 token</label>
