@@ -1,0 +1,5 @@
+{
+  "name": "test-30 · Morton",
+  "trajectory": "./data/merge-trajectory.json",
+  "mesh": "./data/mesh.glb"
+}
