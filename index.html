@@ -47,11 +47,13 @@
             <option value="morton">Morton 排名</option>
             <option value="group">实际合并组</option>
           </select></label>
+          <label><input type="checkbox" id="show-mesh" checked disabled> 最终网格（半透明）</label>
+          <label class="native-only"><input type="checkbox" id="show-all-points" disabled> 显示全部点</label>
         </div>
         <input type="range" id="step-slider" min="0" max="49" value="0" aria-label="去噪步时间轴">
       </div>
       <div id="scene"></div>
-      <div id="order-panel" class="order-panel merge-only" hidden>
+      <div id="order-panel" class="order-panel" hidden>
         <div class="order-heading"><strong>Morton 序列</strong><span id="order-source"></span></div>
         <canvas id="order-strip" role="img" aria-label="Morton 排序渐变"></canvas>
         <div class="order-ends"><span>首位</span><span>末位</span></div>
@@ -61,8 +63,6 @@
         <div class="control-row wrap">
           <label class="merge-only"><input type="checkbox" id="show-tokens" checked> 原始 token</label>
           <label class="merge-only"><input type="checkbox" id="show-reps"> 代表 token</label>
-          <label><input type="checkbox" id="show-mesh" checked disabled> 最终网格（半透明）</label>
-          <label class="native-only"><input type="checkbox" id="show-all-points" disabled> 显示全部点</label>
           <label class="merge-only"><input type="checkbox" id="show-lines" checked> 选中组合并连线</label>
           <label class="merge-only"><input type="checkbox" id="only-group"> 仅显示选中组</label>
           <label><input type="checkbox" id="auto-rotate"> 自动旋转</label>
@@ -71,6 +71,10 @@
       </div>
     </section>
     <aside class="panel detail-panel">
+      <figure id="input-figure" class="input-figure" hidden>
+        <figcaption>输入图像</figcaption>
+        <img id="input-image" width="1024" height="1024" alt="用于生成此样例的输入图像">
+      </figure>
       <div class="panel-title"><strong>当前帧</strong></div>
       <div class="metrics">
         <div><small>去噪 Step</small><strong id="stat-step">—</strong></div>

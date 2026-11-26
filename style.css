@@ -90,6 +90,30 @@ header {
   border-bottom: 1px solid #e1e6f0;
 }
 
+.input-figure {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 15px 17px;
+  border-bottom: 1px solid #dfe6f2;
+}
+
+.input-figure figcaption {
+  margin-bottom: 10px;
+  font-size: .88rem;
+  font-weight: 650;
+}
+
+.input-figure img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 280px;
+  object-fit: contain;
+  border: 1px solid #dfe6f2;
+  border-radius: 8px;
+  background: radial-gradient(ellipse at 50% 35%, #fbfdff, #e6edf7);
+}
+
 body:not([data-view="native"]) .native-only, body[data-view="native"] .merge-only, #case-picker[hidden] {
   display: none;
 }

@@ -1,22 +1,6 @@
 {
-  "name": "自行车",
+  "name": "持弓少女",
   "trajectory": "./data/merge-trajectory.json",
   "mesh": "./data/mesh.glb",
-  "cases": [
-    {
-      "name": "自行车",
-      "trajectory": "./data/merge-trajectory.json",
-      "mesh": "./data/mesh.glb"
-    },
-    {
-      "name": "持弓少女",
-      "trajectory": "./data/native-case-2.json",
-      "mesh": "./data/mesh-2.glb"
-    },
-    {
-      "name": "鹿人",
-      "trajectory": "./data/native-case-3.json",
-      "mesh": "./data/mesh-3.glb"
-    }
-  ]
+  "input_image": "./data/input.png"
 }

@@ -18,12 +18,18 @@ controls.enableDamping = true;
 controls.dampingFactor = 0.075;
 controls.autoRotateSpeed = 0.85;
 controls.enablePan = true;
-scene.add(new THREE.HemisphereLight(0xffffff, 0x8d847b, 1.7));
-const light = new THREE.DirectionalLight(0xffffff, 2);
-light.position.set(3, 4, 6);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x8d847b, nativeOnly ? 0.95 : 1.7));
+const light = new THREE.DirectionalLight(0xffffff, nativeOnly ? 2.25 : 2);
+if (nativeOnly) light.position.set(-3, 5, 4);
+else light.position.set(3, 4, 6);
 scene.add(light);
+if (nativeOnly) {
+  const fill = new THREE.DirectionalLight(0xd8eaff, 0.7);
+  fill.position.set(4, 1, -2);
+  scene.add(fill);
+}
 if (!nativeOnly) scene.add(new THREE.AxesHelper(0.16));
-if (nativeOnly) $("point-size").value = "3";
+if (nativeOnly) $("point-size").value = "4";
 
 let trace = null;
 let frames = [];
@@ -42,7 +48,8 @@ let autoplay = null;
 let radius = 0.012;
 let worldSpan = 2;
 const sphere = new THREE.SphereGeometry(1, 8, 6);
-const pointMat = new THREE.MeshBasicMaterial();
+// The Native points draw after the translucent shell, with the same depth mask.
+const pointMat = new THREE.MeshBasicMaterial({ transparent: nativeOnly });
 const repMat = new THREE.MeshBasicMaterial({ color: 0xf3a038 });
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
@@ -109,8 +116,8 @@ function validate(input) {
     if (!f.predicted_positions.every(p => Array.isArray(p) && p.length === 3 && p.every(Number.isFinite))) {
       throw new Error("Step " + f.step + " 的位置包含 NaN 或无效值");
     }
-    if (nativeOnly) continue;
     if (f.prediction_morton_order != null) validateOrder(f.prediction_morton_order, tokenCount);
+    if (nativeOnly) continue;
     if (!f.layers || typeof f.layers !== "object") throw new Error("Missing layer snapshots");
     for (const [layer, snap] of Object.entries(f.layers)) {
       if (!/^\d+$/.test(layer) || !Array.isArray(snap.group_ids) ||
@@ -168,6 +175,10 @@ function positionData(frame, snap) {
     note: "当前 step 的 clean-state 预测位置；它不一定是当前层实际用于分组的位置。" };
 }
 
+function showMortonColors(order) {
+  return Boolean(order && (nativeOnly || $("color-mode").value === "morton"));
+}
+
 function removeObject(object) {
   if (!object) return;
   scene.remove(object);
@@ -181,8 +192,9 @@ function resetCamera(positions) {
   const center = box.getCenter(new THREE.Vector3());
   worldSpan = Math.max(size.x, size.y, size.z, 0.2);
   defaultTarget.copy(center);
-  const viewOffset = new THREE.Vector3(1.2, 0.65, 1.48);
-  defaultCam.copy(center).addScaledVector(viewOffset, worldSpan * (nativeOnly ? 0.78 : 1));
+  const viewOffset = nativeOnly ? new THREE.Vector3(0.53, 0.47, 1.80) :
+    new THREE.Vector3(1.2, 0.65, 1.48);
+  defaultCam.copy(center).addScaledVector(viewOffset, worldSpan * (nativeOnly ? 0.86 : 1));
   controls.target.copy(defaultTarget);
   camera.position.copy(defaultCam);
   camera.near = Math.max(0.0005, worldSpan / 2500);
@@ -198,10 +210,11 @@ function setPoints(positions, snap, order) {
     pointCloud = new THREE.InstancedMesh(sphere, pointMat, n);
     pointCloud.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     pointCloud.frustumCulled = false;
+    if (nativeOnly) pointCloud.renderOrder = 1;
     scene.add(pointCloud);
   }
   radius = worldSpan * 0.0045 * Number($("point-size").value) / 4;
-  const useRank = $("color-mode").value === "morton" && order;
+  const useRank = showMortonColors(order);
   const stripeWidth = order?.stripes ? n / order.stripes : 0;
   const activeStripe = stripeWidth > 0 && selectedStripe != null;
   const selectedGroup = snap && selectedToken != null ? snap.group_ids[selectedToken] : null;
@@ -277,7 +290,7 @@ function setPoints(positions, snap, order) {
 function drawOrder() {
   const canvas = $("order-strip");
   const order = shownOrder;
-  const show = Boolean(order && $("color-mode").value === "morton");
+  const show = showMortonColors(order);
   $("order-panel").hidden = !show;
   if (!show) return;
   const n = rankColors.length;
@@ -326,9 +339,11 @@ function updateMetrics(frame, snap, note) {
   $("stat-step").textContent = frame.step + 1;
   $("stat-n").textContent = trace.token_count;
   if (nativeOnly) {
+    const rank = selectedToken != null && shownOrder ? shownOrder.ranks[selectedToken] + 1 : null;
     $("selection-info").textContent = selectedToken == null ? "点击三维点查看预测坐标。" :
       "Token #" + selectedToken + " · XYZ (" +
-        frame.predicted_positions[selectedToken].map(value => value.toFixed(4)).join(", ") + ")";
+        frame.predicted_positions[selectedToken].map(value => value.toFixed(4)).join(", ") + ")" +
+        (rank == null ? "" : " · Morton 第 " + rank + " 名");
     return;
   }
   $("stat-layer").textContent = $("layer-select").disabled ? "—" : $("layer-select").value;
@@ -374,7 +389,7 @@ function drawFrame() {
   const snap = nativeOnly ? null : frame.layers?.[$("layer-select").value] || null;
   const { frame: displayedFrame, note } = positionData(frame, snap);
   const positions = displayedFrame.predicted_positions;
-  shownOrder = nativeOnly ? null : mortonData(frame, snap, displayedFrame);
+  shownOrder = mortonData(frame, snap, displayedFrame);
   if (selectedToken != null && selectedToken >= positions.length) selectedToken = null;
   setPoints(positions, snap, shownOrder);
   drawOrder();
@@ -387,7 +402,9 @@ async function loadTrace(input, name) {
   validate(input);
   stopPlayback();
   trace = input;
-  if (!nativeOnly) prepareRankColors(trace.token_count);
+  if (!nativeOnly || input.frames.some(frame => frame.prediction_morton_order)) {
+    prepareRankColors(trace.token_count);
+  }
   frames = [...input.frames].sort((a, b) => a.step - b.step);
   frameIndex = frames.length - 1;
   selectedToken = null;
@@ -442,6 +459,24 @@ function syncMeshVisibility() {
   if (meshDepthObject) meshDepthObject.visible = showMesh && !$("show-all-points").checked;
 }
 
+function refineMeshGeometry(geometry) {
+  const index = geometry.getIndex();
+  if (index) {
+    const source = index.array;
+    const valid = new source.constructor(source.length);
+    let count = 0;
+    for (let i = 0; i < source.length; i += 3) {
+      const a = source[i], b = source[i + 1], c = source[i + 2];
+      if (a === b || b === c || a === c) continue;
+      valid[count++] = a;
+      valid[count++] = b;
+      valid[count++] = c;
+    }
+    if (count < source.length) geometry.setIndex(new THREE.BufferAttribute(valid.subarray(0, count), 1));
+  }
+  if (!geometry.hasAttribute("normal")) geometry.computeVertexNormals();
+}
+
 function replaceMesh(nextMesh) {
   if (meshDepthObject) scene.remove(meshDepthObject);
   meshDepthObject = null;
@@ -463,16 +498,20 @@ function replaceMesh(nextMesh) {
     return;
   }
   const meshMaterial = new THREE.MeshStandardMaterial({
-    color: nativeOnly ? 0xb8c9de : 0xccc4b9,
-    roughness: 0.86, metalness: 0, transparent: true,
-    opacity: nativeOnly ? 0.25 : 0.35,
+    color: nativeOnly ? 0x74839b : 0xccc4b9,
+    roughness: nativeOnly ? 0.70 : 0.86, metalness: 0, transparent: true,
+    opacity: nativeOnly ? 0.48 : 0.35,
     side: nativeOnly ? THREE.FrontSide : THREE.DoubleSide,
     depthWrite: false,
   });
+  const geometries = new Set();
   meshObject.traverse(obj => {
-    if (obj.isMesh) obj.material = meshMaterial;
+    if (!obj.isMesh) return;
+    geometries.add(obj.geometry);
+    obj.material = meshMaterial;
   });
   if (nativeOnly) {
+    geometries.forEach(refineMeshGeometry);
     const span = new THREE.Box3().setFromObject(meshObject).getSize(new THREE.Vector3());
     surfaceAllowance.value = 0.015 * Math.max(span.x, span.y, span.z);
     meshDepthObject = meshObject.clone();
@@ -620,6 +659,11 @@ async function loadBundledTrace(entry) {
   const [payload, mesh] = await Promise.all([trajectory, reference]);
   await loadTrace(payload, entry.name || "Research case");
   replaceMesh(mesh?.scene ?? null);
+  const figure = $("input-figure");
+  const inputImage = $("input-image");
+  figure.hidden = !entry.input_image;
+  if (entry.input_image) inputImage.src = entry.input_image;
+  else inputImage.removeAttribute("src");
   if (mesh instanceof Error) status("位置轨迹已加载，参考网格读取失败。", true);
 }
 
