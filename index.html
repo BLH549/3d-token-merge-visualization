@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Native Token 位置预测</title>
-  <link rel="stylesheet" href="./style.css">
+  <link rel="stylesheet" href="./style.css?v=6b0daf4b395d">
   <script type="importmap">
   {"imports":{
     "three":"https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js",
@@ -39,9 +39,8 @@
           <button id="reset">↺ 重置视角</button>
           <label id="case-picker" hidden>样例 <select id="case-select"></select></label>
           <label id="point-set-picker" hidden>点集 <select id="point-set-select">
-            <option value="native">Native 预测</option>
-            <option value="before">合并前全部点</option>
-            <option value="representatives">合并后代表点</option>
+            <option value="all">全部点</option>
+            <option value="representatives">代表点</option>
           </select></label>
           <label>去噪步 <select id="step-select"></select></label>
           <label class="merge-only">Layer <select id="layer-select"></select></label>
@@ -54,7 +53,6 @@
             <option value="group">实际合并组</option>
           </select></label>
           <label><input type="checkbox" id="show-mesh" checked disabled> 最终网格（半透明）</label>
-          <label class="native-only"><input type="checkbox" id="show-all-points" disabled> <span id="show-all-points-label">显示全部点</span></label>
         </div>
         <input type="range" id="step-slider" min="0" max="49" value="0" aria-label="去噪步时间轴">
       </div>
@@ -90,7 +88,7 @@
       </div>
       <div class="info-section merge-only"><h3>当前分组</h3><p id="plan-info" class="muted">导入记录后查看</p></div>
       <div class="info-section" id="representative-details" hidden>
-        <p class="muted" id="representative-info"></p>
+        <p class="muted">沿 Morton 顺序每 16 个点选 8 个代表。两种视图共用当前步的 Native 坐标和最终网格。</p>
         <button id="export-representatives" disabled>导出代表点 CSV</button>
       </div>
       <div class="info-section"><h3>选中的 token</h3><p id="selection-info" class="muted">点击三维点查看 token。</p></div>
@@ -102,6 +100,6 @@
     </aside>
   </main>
   <footer>拖动旋转 · 滚轮缩放 · 点击点云查看 token<span class="merge-only"> · 点击色带查看排序邻域</span></footer>
-  <script type="module" src="./app.js"></script>
+  <script type="module" src="./app.js?v=11ca88d8d472"></script>
 </body>
 </html>

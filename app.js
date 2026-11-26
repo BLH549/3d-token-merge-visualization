@@ -4,6 +4,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
 const $ = (id) => document.getElementById(id);
 const nativeOnly = document.body.dataset.view === "native";
+const pointSetPicker = $("point-set-select");
 const sceneHost = $("scene");
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -38,20 +39,17 @@ let selectedToken = null;
 let selectedStripe = null;
 let shownOrder = null;
 let shownTokenIds = null;
-let shownPositionFrame = null;
-let pointSet = "native";
 let rankColors = [];
 let pointCloud = null;
 let representativeCloud = null;
 let selectedLines = null;
 let meshObject = null;
-let meshDepthObject = null;
 let meshObjectURL = null;
 let autoplay = null;
 let radius = 0.012;
 let worldSpan = 2;
 const sphere = new THREE.SphereGeometry(1, 8, 6);
-// The Native points draw after the translucent shell, with the same depth mask.
+// Draw Native points after the translucent reference mesh.
 const pointMat = new THREE.MeshBasicMaterial({ transparent: nativeOnly });
 const repMat = new THREE.MeshBasicMaterial({ color: 0xf3a038 });
 const raycaster = new THREE.Raycaster();
@@ -63,19 +61,6 @@ const gradient = [0x243caa, 0x405ed9, 0x248bc1, 0x10a987, 0x80bf43, 0xeaa527]
   .map(hex => new THREE.Color(hex));
 const dimmed = new THREE.Color("#abaeaf");
 const plainPoint = new THREE.Color(nativeOnly ? "#315b92" : "#506e9b");
-const surfaceAllowance = { value: 0 };
-const meshDepthMaterial = new THREE.MeshBasicMaterial({ colorWrite: false });
-meshDepthMaterial.onBeforeCompile = shader => {
-  // Move only the depth pass along the viewing ray to keep a thin shell
-  // of predictions visible on and just behind the triangulated surface.
-  shader.uniforms.surfaceAllowance = surfaceAllowance;
-  shader.vertexShader = "uniform float surfaceAllowance;\n" + shader.vertexShader.replace(
-    "#include <project_vertex>",
-    `#include <project_vertex>
-     mvPosition.xyz += normalize(mvPosition.xyz) * surfaceAllowance;
-     gl_Position = projectionMatrix * mvPosition;`
-  );
-};
 
 function status(message, isError = false) {
   $("status").textContent = message;
@@ -141,20 +126,16 @@ function validate(input) {
       }
     }
   }
-  if (nativeOnly && (!["native", "morton_50"].includes(input.source?.method) || seen.size !== 50 ||
+  if (nativeOnly && (input.source?.method !== "native" || seen.size !== 50 ||
       input.frames.some(f => f.step < 0 || f.step >= 50))) {
     throw new Error("需要完整的 50 步位置预测");
   }
-  if (nativeOnly && input.source?.method === "morton_50") {
-    if (input.frames.some(f => !f.prediction_morton_order)) {
-      throw new Error("合并代表点需要逐步 Morton 排名");
-    }
+  if (nativeOnly && input.frames.some(f => f.demo_representative_ids != null)) {
     for (const f of input.frames) {
-      const plan = f.representative_plan;
-      if (!plan) continue;
-      if (!Number.isInteger(plan.position_origin_step) || plan.position_origin_step < 0 ||
-          plan.position_origin_step >= f.step || !Array.isArray(plan.anchors) || !plan.anchors.length ||
-          plan.anchors.some(i => !Number.isInteger(i) || i < 0 || i >= tokenCount)) {
+      const ids = f.demo_representative_ids;
+      if (!f.prediction_morton_order || !Array.isArray(ids) || ids.length * 2 !== tokenCount ||
+          new Set(ids).size !== ids.length ||
+          ids.some(i => !Number.isInteger(i) || i < 0 || i >= tokenCount)) {
         throw new Error("第 " + (f.step + 1) + " 步的代表点记录无效");
       }
     }
@@ -345,7 +326,7 @@ function drawOrder() {
   }
   $("order-source").textContent = order.actual ?
     "实际分段 · " + order.stripes + " 段 × " + n / order.stripes + " token" :
-    shownPositionFrame !== frames[frameIndex] && pointSet !== "native" ? "合并输入的排序" : "预测坐标排序";
+    "预测坐标排序";
   canvas.classList.toggle("interactive", Boolean(order.stripes));
   $("order-selection").textContent = stripe != null ?
     "第 " + (stripe + 1) + " 段 · 排名 " + (stripe * n / order.stripes + 1) + "–" +
@@ -355,28 +336,18 @@ function drawOrder() {
     "颜色表示所显示预测坐标的排序名次。";
 }
 
-function updateMetrics(frame, snap, note, plan) {
+function updateMetrics(frame, snap, note) {
   $("stat-step").textContent = frame.step + 1;
   $("stat-n").textContent = trace.token_count;
   if (nativeOnly) {
-    const merged = pointSet !== "native";
-    $("stat-n-label").textContent = merged ? "当前点集 Token 数" : "预测 Token 数";
+    $("stat-n-label").textContent = "当前点集 Token 数";
     $("stat-n").textContent = shownTokenIds ? shownTokenIds.length : trace.token_count;
-    $("representative-details").hidden = !merged;
-    $("export-representatives").disabled = !plan;
-    $("show-all-points-label").textContent = merged ? "显示被网格遮挡的点" : "显示全部点";
-    if (merged) {
-      $("representative-info").textContent = plan ?
-        "第 " + trace.source.layer + " 层（零基）· " + trace.token_count + " → " +
-        plan.anchors.length + " 槽位 · 减少 " +
-        ((1 - plan.anchors.length / trace.token_count) * 100).toFixed(0) +
-        "% · 使用第 " + (plan.position_origin_step + 1) + " 步的 XYZ 和 Morton 排名。" :
-        "该步未执行合并。";
-    }
+    $("representative-details").hidden = !shownTokenIds;
+    $("export-representatives").disabled = !shownTokenIds;
     const rank = selectedToken != null && shownOrder ? shownOrder.ranks[selectedToken] + 1 : null;
     $("selection-info").textContent = selectedToken == null ? "点击三维点查看预测坐标。" :
       "Token #" + selectedToken + " · XYZ (" +
-        shownPositionFrame.predicted_positions[selectedToken].map(value => value.toFixed(4)).join(", ") + ")" +
+        frame.predicted_positions[selectedToken].map(value => value.toFixed(4)).join(", ") + ")" +
         (rank == null ? "" : " · Morton 第 " + rank + " 名");
     return;
   }
@@ -421,41 +392,43 @@ function drawFrame() {
   if (!trace) return;
   const frame = frames[frameIndex];
   const snap = nativeOnly ? null : frame.layers?.[$("layer-select").value] || null;
-  const plan = pointSet === "native" ? null : frame.representative_plan;
   const { frame: positionFrame, note } = positionData(frame, snap);
-  shownPositionFrame = plan ? frames[plan.position_origin_step] : positionFrame;
-  const positions = shownPositionFrame.predicted_positions;
-  shownOrder = mortonData(frame, snap, shownPositionFrame);
-  shownTokenIds = pointSet === "representatives" ? [...new Set(plan?.anchors ?? [])] : null;
+  const positions = positionFrame.predicted_positions;
+  shownOrder = mortonData(frame, snap, positionFrame);
+  shownTokenIds = pointSetPicker.value === "representatives" ? frame.demo_representative_ids ?? null : null;
   if (selectedToken != null && (selectedToken >= positions.length ||
       (shownTokenIds && !shownTokenIds.includes(selectedToken)))) selectedToken = null;
   setPoints(positions, snap, shownOrder, shownTokenIds);
   drawOrder();
-  updateMetrics(frame, snap, note, plan);
+  updateMetrics(frame, snap, note);
   $("step-slider").value = frameIndex;
   $("step-select").value = String(frameIndex);
 }
 
-async function loadTrace(input, name, keepView = false, nextPointSet = pointSet) {
+async function loadTrace(input, name) {
   validate(input);
   stopPlayback();
-  pointSet = nextPointSet;
   trace = input;
   if (!nativeOnly || input.frames.some(frame => frame.prediction_morton_order)) {
     prepareRankColors(trace.token_count);
   }
   frames = [...input.frames].sort((a, b) => a.step - b.step);
-  frameIndex = keepView ? Math.min(frameIndex, frames.length - 1) : frames.length - 1;
+  frameIndex = frames.length - 1;
   selectedToken = null;
   selectedStripe = null;
   $("case-title").textContent = name || input.source?.run_id || "Trajectory";
-  $("method-label").textContent = nativeOnly ?
-    (input.source?.method === "morton_50" ? "Morton 50% · Layer " + input.source.layer : "Native") :
-    input.source?.method || "unknown method";
+  $("method-label").textContent = nativeOnly ? "Native" : input.source?.method || "unknown method";
   if (nativeOnly) {
-    $("position-intro").textContent = pointSet === "native" ?
-      "位置头读取 Native DiT 每一步估计的干净 latent，输出 4,096 个 token 的三维坐标。" :
-      "在同一步切换全部点和代表点，两者沿用合并输入的坐标与 Morton 渐变。";
+    const count = frames[0].demo_representative_ids?.length;
+    $("point-set-picker").hidden = count == null;
+    pointSetPicker.value = "all";
+    $("position-intro").textContent = count == null ?
+      "位置头读取 Native DiT 每步估计的干净 latent，输出预测点的三维坐标。" :
+      "从同一步 Native 位置预测中查看全部点，或按 Morton 顺序筛选代表点。";
+    if (count != null) {
+      pointSetPicker.options[0].textContent = "全部点（" + trace.token_count.toLocaleString("en-US") + "）";
+      pointSetPicker.options[1].textContent = "代表点（" + count.toLocaleString("en-US") + "）";
+    }
   }
   $("step-slider").max = frames.length - 1;
   $("step-select").replaceChildren();
@@ -479,7 +452,7 @@ async function loadTrace(input, name, keepView = false, nextPointSet = pointSet)
     .find(l => frames.some(f => f.layers?.[String(l)]));
   $("layer-select").value = firstRecordedLayer?.toString() ?? ($("layer-select").options[0]?.value || "");
   $("layer-select").disabled = firstRecordedLayer == null;
-  if (!keepView) resetCamera(frames[frameIndex].predicted_positions);
+  resetCamera(frames[frameIndex].predicted_positions);
   drawFrame();
   status("已加载 " + frames.length + " 个去噪步。");
 }
@@ -500,9 +473,7 @@ function changeFrame(index) {
 function syncMeshVisibility() {
   const showMesh = Boolean(meshObject) && $("show-mesh").checked;
   $("show-mesh").disabled = !meshObject;
-  $("show-all-points").disabled = !showMesh;
   if (meshObject) meshObject.visible = showMesh;
-  if (meshDepthObject) meshDepthObject.visible = showMesh && !$("show-all-points").checked;
 }
 
 function refineMeshGeometry(geometry) {
@@ -524,8 +495,6 @@ function refineMeshGeometry(geometry) {
 }
 
 function replaceMesh(nextMesh) {
-  if (meshDepthObject) scene.remove(meshDepthObject);
-  meshDepthObject = null;
   if (meshObject) {
     scene.remove(meshObject);
     const geometries = new Set();
@@ -556,18 +525,7 @@ function replaceMesh(nextMesh) {
     geometries.add(obj.geometry);
     obj.material = meshMaterial;
   });
-  if (nativeOnly) {
-    geometries.forEach(refineMeshGeometry);
-    const span = new THREE.Box3().setFromObject(meshObject).getSize(new THREE.Vector3());
-    surfaceAllowance.value = 0.015 * Math.max(span.x, span.y, span.z);
-    meshDepthObject = meshObject.clone();
-    meshDepthObject.traverse(obj => {
-      if (!obj.isMesh) return;
-      obj.material = meshDepthMaterial;
-      obj.renderOrder = -1;
-    });
-    scene.add(meshDepthObject);
-  }
+  if (nativeOnly) geometries.forEach(refineMeshGeometry);
   scene.add(meshObject);
   syncMeshVisibility();
 }
@@ -606,21 +564,19 @@ $("order-strip").addEventListener("click", event => {
 for (const key of ["show-tokens", "show-reps", "show-lines", "only-group", "point-size"]) {
   $(key).addEventListener("input", drawFrame);
 }
-for (const key of ["show-mesh", "show-all-points"]) $(key).addEventListener("change", syncMeshVisibility);
-const pointSetPicker = $("point-set-select");
+$("show-mesh").addEventListener("change", syncMeshVisibility);
+pointSetPicker.addEventListener("change", drawFrame);
 
 $("export-representatives").addEventListener("click", () => {
   const frame = frames[frameIndex];
-  const plan = frame?.representative_plan;
-  if (!plan) return;
-  const rows = ["step,layer,position_step,slot,token_id,morton_rank,x,y,z"];
-  for (const [slot, token] of plan.anchors.entries()) {
-    rows.push([frame.step + 1, trace.source.layer, plan.position_origin_step + 1, slot, token,
-      shownOrder.ranks[token] + 1, ...shownPositionFrame.predicted_positions[token]].join(","));
+  if (!frame?.demo_representative_ids) return;
+  const rows = ["step,token_id,morton_rank,x,y,z"];
+  for (const token of frame.demo_representative_ids) {
+    rows.push([frame.step + 1, token, shownOrder.ranks[token] + 1, ...frame.predicted_positions[token]].join(","));
   }
   const url = URL.createObjectURL(new Blob([rows.join("\n") + "\n"], { type: "text/csv" }));
   const link = document.createElement("a");
-  link.download = "representatives-step-" + (frame.step + 1) + ".csv";
+  link.download = "native-demo-representatives-step-" + (frame.step + 1) + ".csv";
   link.href = url;
   link.click();
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -657,7 +613,7 @@ $("screenshot").addEventListener("click", () => {
   ctx.font = "600 17px sans-serif";
   const step = trace ? frames[frameIndex].step + 1 : null;
   const layer = $("layer-select").disabled ? "" : " · Layer " + $("layer-select").value;
-  const mode = pointSet !== "native" ? " · " + pointSetPicker.selectedOptions[0].textContent : "";
+  const mode = !$("point-set-picker").hidden ? " · " + pointSetPicker.selectedOptions[0].textContent : "";
   ctx.fillText($("case-title").textContent + (step != null ? " · 第 " + step + " 步" + layer + mode : ""), margin, 34);
   ctx.drawImage(view, margin, 54);
   if (showOrder) {
@@ -688,11 +644,7 @@ renderer.domElement.addEventListener("pointerup", event => {
   pointer.set(((event.clientX - rect.left) / rect.width) * 2 - 1,
               -((event.clientY - rect.top) / rect.height) * 2 + 1);
   raycaster.setFromCamera(pointer, camera);
-  let hit = raycaster.intersectObject(pointCloud, false)[0];
-  if (hit && meshDepthObject?.visible) {
-    const surface = raycaster.intersectObject(meshObject, true)[0];
-    if (surface && hit.distance > surface.distance + surfaceAllowance.value) hit = null;
-  }
+  const hit = raycaster.intersectObject(pointCloud, false)[0];
   stopPlayback();
   selectedStripe = null;
   selectedToken = hit?.instanceId != null ? (shownTokenIds?.[hit.instanceId] ?? hit.instanceId) : null;
@@ -715,14 +667,14 @@ function animate() {
 }
 animate();
 
-async function loadBundledTrace(entry, keepView = false, nextPointSet = pointSet) {
+async function loadBundledTrace(entry) {
   const trajectory = fetch(entry.trajectory, { cache: "no-cache" }).then(response => {
     if (!response.ok) throw new Error("轨迹文件 HTTP " + response.status);
     return response.json();
   });
   const reference = entry.mesh ? new GLTFLoader().loadAsync(entry.mesh).catch(error => error) : null;
   const [payload, mesh] = await Promise.all([trajectory, reference]);
-  await loadTrace(payload, entry.name || "Research case", keepView, nextPointSet);
+  await loadTrace(payload, entry.name || "Research case");
   replaceMesh(mesh?.scene ?? null);
   const figure = $("input-figure");
   const inputImage = $("input-image");
@@ -738,29 +690,6 @@ async function loadBundledTrace(entry, keepView = false, nextPointSet = pointSet
     if (!response.ok) throw new Error("No bundled manifest");
     const manifest = await response.json();
     await loadBundledTrace(manifest);
-    if (nativeOnly && manifest.representative_view) {
-      $("point-set-picker").hidden = false;
-      pointSetPicker.addEventListener("change", async () => {
-        const next = pointSetPicker.value;
-        stopPlayback();
-        if ((pointSet === "native") === (next === "native")) {
-          pointSet = next;
-          drawFrame();
-          return;
-        }
-        pointSetPicker.disabled = true;
-        status("正在加载点集…");
-        try {
-          const entry = next === "native" ? manifest : manifest.representative_view;
-          await loadBundledTrace(entry, true, next);
-        } catch (err) {
-          pointSetPicker.value = pointSet;
-          status("点集读取失败：" + err.message, true);
-        } finally {
-          pointSetPicker.disabled = false;
-        }
-      });
-    }
     if (nativeOnly && manifest.cases?.length > 1) {
       const picker = $("case-select");
       manifest.cases.forEach((entry, index) => picker.add(new Option(entry.name, String(index))));
