@@ -37,6 +37,9 @@ let frameIndex = 0;
 let selectedToken = null;
 let selectedStripe = null;
 let shownOrder = null;
+let shownTokenIds = null;
+let shownPositionFrame = null;
+let pointSet = "native";
 let rankColors = [];
 let pointCloud = null;
 let representativeCloud = null;
@@ -138,9 +141,23 @@ function validate(input) {
       }
     }
   }
-  if (nativeOnly && (input.source?.method !== "native" || seen.size !== 50 ||
+  if (nativeOnly && (!["native", "morton_50"].includes(input.source?.method) || seen.size !== 50 ||
       input.frames.some(f => f.step < 0 || f.step >= 50))) {
-    throw new Error("需要完整的 50 步 Native 位置预测");
+    throw new Error("需要完整的 50 步位置预测");
+  }
+  if (nativeOnly && input.source?.method === "morton_50") {
+    if (input.frames.some(f => !f.prediction_morton_order)) {
+      throw new Error("合并代表点需要逐步 Morton 排名");
+    }
+    for (const f of input.frames) {
+      const plan = f.representative_plan;
+      if (!plan) continue;
+      if (!Number.isInteger(plan.position_origin_step) || plan.position_origin_step < 0 ||
+          plan.position_origin_step >= f.step || !Array.isArray(plan.anchors) || !plan.anchors.length ||
+          plan.anchors.some(i => !Number.isInteger(i) || i < 0 || i >= tokenCount)) {
+        throw new Error("第 " + (f.step + 1) + " 步的代表点记录无效");
+      }
+    }
   }
 }
 
@@ -203,9 +220,9 @@ function resetCamera(positions) {
   controls.update();
 }
 
-function setPoints(positions, snap, order) {
+function setPoints(positions, snap, order, indices) {
   const n = positions.length;
-  if (!pointCloud || pointCloud.count !== n) {
+  if (!pointCloud || pointCloud.instanceMatrix.count !== n) {
     if (pointCloud) scene.remove(pointCloud);
     pointCloud = new THREE.InstancedMesh(sphere, pointMat, n);
     pointCloud.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -213,12 +230,14 @@ function setPoints(positions, snap, order) {
     if (nativeOnly) pointCloud.renderOrder = 1;
     scene.add(pointCloud);
   }
+  pointCloud.count = indices ? indices.length : n;
   radius = worldSpan * 0.0045 * Number($("point-size").value) / 4;
   const useRank = showMortonColors(order);
   const stripeWidth = order?.stripes ? n / order.stripes : 0;
   const activeStripe = stripeWidth > 0 && selectedStripe != null;
   const selectedGroup = snap && selectedToken != null ? snap.group_ids[selectedToken] : null;
-  for (let i = 0; i < n; ++i) {
+  for (let instance = 0; instance < pointCloud.count; ++instance) {
+    const i = indices ? indices[instance] : instance;
     const group = snap ? snap.group_ids[i] : i;
     const highlighted = activeStripe ? Math.floor(order.ranks[i] / stripeWidth) === selectedStripe :
       selectedGroup != null && group === selectedGroup;
@@ -227,22 +246,22 @@ function setPoints(positions, snap, order) {
     dummy.position.set(...positions[i]);
     dummy.scale.setScalar(hidden ? 0 : radius * (highlighted ? 1.55 : 1));
     dummy.updateMatrix();
-    pointCloud.setMatrixAt(i, dummy.matrix);
+    pointCloud.setMatrixAt(instance, dummy.matrix);
     let color = useRank ? rankColors[order.ranks[i]] : snap ? colorForGroup(group) : plainPoint;
     if (hasSelection && !highlighted) color = dimmed;
     if (i === selectedToken) {
       color = useRank ? color : new THREE.Color("#e34932");
       dummy.scale.setScalar(radius * 2.1);
       dummy.updateMatrix();
-      pointCloud.setMatrixAt(i, dummy.matrix);
+      pointCloud.setMatrixAt(instance, dummy.matrix);
     }
-    pointCloud.setColorAt(i, color);
+    pointCloud.setColorAt(instance, color);
   }
   pointCloud.instanceMatrix.needsUpdate = true;
   // InstancedMesh.raycast first checks this sphere; matrices change every frame.
   pointCloud.computeBoundingSphere();
   if (pointCloud.instanceColor) pointCloud.instanceColor.needsUpdate = true;
-  pointCloud.visible = $("show-tokens").checked;
+  pointCloud.visible = $("show-tokens").checked && pointCloud.count > 0;
   if (nativeOnly) return;
 
   if (representativeCloud) scene.remove(representativeCloud);
@@ -325,24 +344,39 @@ function drawOrder() {
     ctx.fillRect((selectedRank + .5) * width / n - dpr, 0, 2 * dpr, height);
   }
   $("order-source").textContent = order.actual ?
-    "实际分段 · " + order.stripes + " 段 × " + n / order.stripes + " token" : "预测坐标排序";
+    "实际分段 · " + order.stripes + " 段 × " + n / order.stripes + " token" :
+    shownPositionFrame !== frames[frameIndex] && pointSet !== "native" ? "合并输入的排序" : "预测坐标排序";
   canvas.classList.toggle("interactive", Boolean(order.stripes));
   $("order-selection").textContent = stripe != null ?
     "第 " + (stripe + 1) + " 段 · 排名 " + (stripe * n / order.stripes + 1) + "–" +
       ((stripe + 1) * n / order.stripes) + (selectedRank != null ? " · 选中排名 " + (selectedRank + 1) : "") :
     selectedRank != null ? "第 " + (selectedRank + 1) + " 名 · token #" + selectedToken :
     order.actual ? "点击色带查看同一分段。每段内部还会进行特征匹配。" :
-    "颜色表示这一帧预测坐标的排序名次。";
+    "颜色表示所显示预测坐标的排序名次。";
 }
 
-function updateMetrics(frame, snap, note) {
+function updateMetrics(frame, snap, note, plan) {
   $("stat-step").textContent = frame.step + 1;
   $("stat-n").textContent = trace.token_count;
   if (nativeOnly) {
+    const merged = pointSet !== "native";
+    $("stat-n-label").textContent = merged ? "当前点集 Token 数" : "预测 Token 数";
+    $("stat-n").textContent = shownTokenIds ? shownTokenIds.length : trace.token_count;
+    $("representative-details").hidden = !merged;
+    $("export-representatives").disabled = !plan;
+    $("show-all-points-label").textContent = merged ? "显示被网格遮挡的点" : "显示全部点";
+    if (merged) {
+      $("representative-info").textContent = plan ?
+        "第 " + trace.source.layer + " 层（零基）· " + trace.token_count + " → " +
+        plan.anchors.length + " 槽位 · 减少 " +
+        ((1 - plan.anchors.length / trace.token_count) * 100).toFixed(0) +
+        "% · 使用第 " + (plan.position_origin_step + 1) + " 步的 XYZ 和 Morton 排名。" :
+        "该步未执行合并。";
+    }
     const rank = selectedToken != null && shownOrder ? shownOrder.ranks[selectedToken] + 1 : null;
     $("selection-info").textContent = selectedToken == null ? "点击三维点查看预测坐标。" :
       "Token #" + selectedToken + " · XYZ (" +
-        frame.predicted_positions[selectedToken].map(value => value.toFixed(4)).join(", ") + ")" +
+        shownPositionFrame.predicted_positions[selectedToken].map(value => value.toFixed(4)).join(", ") + ")" +
         (rank == null ? "" : " · Morton 第 " + rank + " 名");
     return;
   }
@@ -387,30 +421,42 @@ function drawFrame() {
   if (!trace) return;
   const frame = frames[frameIndex];
   const snap = nativeOnly ? null : frame.layers?.[$("layer-select").value] || null;
-  const { frame: displayedFrame, note } = positionData(frame, snap);
-  const positions = displayedFrame.predicted_positions;
-  shownOrder = mortonData(frame, snap, displayedFrame);
-  if (selectedToken != null && selectedToken >= positions.length) selectedToken = null;
-  setPoints(positions, snap, shownOrder);
+  const plan = pointSet === "native" ? null : frame.representative_plan;
+  const { frame: positionFrame, note } = positionData(frame, snap);
+  shownPositionFrame = plan ? frames[plan.position_origin_step] : positionFrame;
+  const positions = shownPositionFrame.predicted_positions;
+  shownOrder = mortonData(frame, snap, shownPositionFrame);
+  shownTokenIds = pointSet === "representatives" ? [...new Set(plan?.anchors ?? [])] : null;
+  if (selectedToken != null && (selectedToken >= positions.length ||
+      (shownTokenIds && !shownTokenIds.includes(selectedToken)))) selectedToken = null;
+  setPoints(positions, snap, shownOrder, shownTokenIds);
   drawOrder();
-  updateMetrics(frame, snap, note);
+  updateMetrics(frame, snap, note, plan);
   $("step-slider").value = frameIndex;
   $("step-select").value = String(frameIndex);
 }
 
-async function loadTrace(input, name) {
+async function loadTrace(input, name, keepView = false, nextPointSet = pointSet) {
   validate(input);
   stopPlayback();
+  pointSet = nextPointSet;
   trace = input;
   if (!nativeOnly || input.frames.some(frame => frame.prediction_morton_order)) {
     prepareRankColors(trace.token_count);
   }
   frames = [...input.frames].sort((a, b) => a.step - b.step);
-  frameIndex = frames.length - 1;
+  frameIndex = keepView ? Math.min(frameIndex, frames.length - 1) : frames.length - 1;
   selectedToken = null;
   selectedStripe = null;
   $("case-title").textContent = name || input.source?.run_id || "Trajectory";
-  $("method-label").textContent = nativeOnly ? "Native" : input.source?.method || "unknown method";
+  $("method-label").textContent = nativeOnly ?
+    (input.source?.method === "morton_50" ? "Morton 50% · Layer " + input.source.layer : "Native") :
+    input.source?.method || "unknown method";
+  if (nativeOnly) {
+    $("position-intro").textContent = pointSet === "native" ?
+      "位置头读取 Native DiT 每一步估计的干净 latent，输出 4,096 个 token 的三维坐标。" :
+      "在同一步切换全部点和代表点，两者沿用合并输入的坐标与 Morton 渐变。";
+  }
   $("step-slider").max = frames.length - 1;
   $("step-select").replaceChildren();
   for (const [index, f] of frames.entries()) {
@@ -433,7 +479,7 @@ async function loadTrace(input, name) {
     .find(l => frames.some(f => f.layers?.[String(l)]));
   $("layer-select").value = firstRecordedLayer?.toString() ?? ($("layer-select").options[0]?.value || "");
   $("layer-select").disabled = firstRecordedLayer == null;
-  resetCamera(frames[frameIndex].predicted_positions);
+  if (!keepView) resetCamera(frames[frameIndex].predicted_positions);
   drawFrame();
   status("已加载 " + frames.length + " 个去噪步。");
 }
@@ -561,6 +607,24 @@ for (const key of ["show-tokens", "show-reps", "show-lines", "only-group", "poin
   $(key).addEventListener("input", drawFrame);
 }
 for (const key of ["show-mesh", "show-all-points"]) $(key).addEventListener("change", syncMeshVisibility);
+const pointSetPicker = $("point-set-select");
+
+$("export-representatives").addEventListener("click", () => {
+  const frame = frames[frameIndex];
+  const plan = frame?.representative_plan;
+  if (!plan) return;
+  const rows = ["step,layer,position_step,slot,token_id,morton_rank,x,y,z"];
+  for (const [slot, token] of plan.anchors.entries()) {
+    rows.push([frame.step + 1, trace.source.layer, plan.position_origin_step + 1, slot, token,
+      shownOrder.ranks[token] + 1, ...shownPositionFrame.predicted_positions[token]].join(","));
+  }
+  const url = URL.createObjectURL(new Blob([rows.join("\n") + "\n"], { type: "text/csv" }));
+  const link = document.createElement("a");
+  link.download = "representatives-step-" + (frame.step + 1) + ".csv";
+  link.href = url;
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
 $("auto-rotate").addEventListener("change", e => { controls.autoRotate = e.target.checked; });
 $("play").addEventListener("click", () => {
   if (!trace) return;
@@ -593,7 +657,8 @@ $("screenshot").addEventListener("click", () => {
   ctx.font = "600 17px sans-serif";
   const step = trace ? frames[frameIndex].step + 1 : null;
   const layer = $("layer-select").disabled ? "" : " · Layer " + $("layer-select").value;
-  ctx.fillText($("case-title").textContent + (step != null ? " · 第 " + step + " 步" + layer : ""), margin, 34);
+  const mode = pointSet !== "native" ? " · " + pointSetPicker.selectedOptions[0].textContent : "";
+  ctx.fillText($("case-title").textContent + (step != null ? " · 第 " + step + " 步" + layer + mode : ""), margin, 34);
   ctx.drawImage(view, margin, 54);
   if (showOrder) {
     const top = view.height + 62;
@@ -615,7 +680,7 @@ renderer.domElement.addEventListener("pointerdown", e => {
   renderer.domElement.dataset.downY = String(e.clientY);
 });
 renderer.domElement.addEventListener("pointerup", event => {
-  if (!trace || !pointCloud || !$("show-tokens").checked) return;
+  if (!trace || !pointCloud?.visible) return;
   const dx = event.clientX - Number(renderer.domElement.dataset.downX);
   const dy = event.clientY - Number(renderer.domElement.dataset.downY);
   if (dx * dx + dy * dy > 36) return; // Orbit drag, not a click.
@@ -630,7 +695,7 @@ renderer.domElement.addEventListener("pointerup", event => {
   }
   stopPlayback();
   selectedStripe = null;
-  selectedToken = hit && hit.instanceId != null ? hit.instanceId : null;
+  selectedToken = hit?.instanceId != null ? (shownTokenIds?.[hit.instanceId] ?? hit.instanceId) : null;
   drawFrame();
 });
 
@@ -650,14 +715,14 @@ function animate() {
 }
 animate();
 
-async function loadBundledTrace(entry) {
+async function loadBundledTrace(entry, keepView = false, nextPointSet = pointSet) {
   const trajectory = fetch(entry.trajectory, { cache: "no-cache" }).then(response => {
     if (!response.ok) throw new Error("轨迹文件 HTTP " + response.status);
     return response.json();
   });
   const reference = entry.mesh ? new GLTFLoader().loadAsync(entry.mesh).catch(error => error) : null;
   const [payload, mesh] = await Promise.all([trajectory, reference]);
-  await loadTrace(payload, entry.name || "Research case");
+  await loadTrace(payload, entry.name || "Research case", keepView, nextPointSet);
   replaceMesh(mesh?.scene ?? null);
   const figure = $("input-figure");
   const inputImage = $("input-image");
@@ -673,6 +738,29 @@ async function loadBundledTrace(entry) {
     if (!response.ok) throw new Error("No bundled manifest");
     const manifest = await response.json();
     await loadBundledTrace(manifest);
+    if (nativeOnly && manifest.representative_view) {
+      $("point-set-picker").hidden = false;
+      pointSetPicker.addEventListener("change", async () => {
+        const next = pointSetPicker.value;
+        stopPlayback();
+        if ((pointSet === "native") === (next === "native")) {
+          pointSet = next;
+          drawFrame();
+          return;
+        }
+        pointSetPicker.disabled = true;
+        status("正在加载点集…");
+        try {
+          const entry = next === "native" ? manifest : manifest.representative_view;
+          await loadBundledTrace(entry, true, next);
+        } catch (err) {
+          pointSetPicker.value = pointSet;
+          status("点集读取失败：" + err.message, true);
+        } finally {
+          pointSetPicker.disabled = false;
+        }
+      });
+    }
     if (nativeOnly && manifest.cases?.length > 1) {
       const picker = $("case-select");
       manifest.cases.forEach((entry, index) => picker.add(new Option(entry.name, String(index))));

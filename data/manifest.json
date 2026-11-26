@@ -2,5 +2,11 @@
   "name": "持弓少女",
   "trajectory": "./data/merge-trajectory.json",
   "mesh": "./data/mesh.glb",
-  "input_image": "./data/input.png"
+  "input_image": "./data/input.png",
+  "representative_view": {
+    "name": "持弓少女",
+    "trajectory": "./data/representatives.json",
+    "mesh": "./data/mesh-merged.glb",
+    "input_image": "./data/input.png"
+  }
 }

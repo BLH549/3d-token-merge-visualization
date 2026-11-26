@@ -114,8 +114,13 @@ header {
   background: radial-gradient(ellipse at 50% 35%, #fbfdff, #e6edf7);
 }
 
-body:not([data-view="native"]) .native-only, body[data-view="native"] .merge-only, #case-picker[hidden] {
+body:not([data-view="native"]) .native-only, body[data-view="native"] .merge-only,
+#case-picker[hidden], #point-set-picker[hidden] {
   display: none;
+}
+
+#export-representatives {
+  margin-top: 7px;
 }
 
 .order-heading, .order-ends {
