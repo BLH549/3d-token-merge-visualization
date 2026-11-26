@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>3D Token Merge · Trajectory Viewer</title>
+  <title>Native Token 位置预测</title>
   <link rel="stylesheet" href="./style.css">
   <script type="importmap">
   {"imports":{
@@ -12,36 +12,38 @@
   }}
   </script>
 </head>
-<body>
+<body data-view="native">
   <header>
-    <div><strong>3D Token Merge</strong><span class="subhead">Hunyuan3D 2.1 几何生成</span></div>
+    <div><strong class="merge-only">3D Token Merge</strong><strong class="native-only">Native Token 位置预测</strong><span class="subhead">Hunyuan3D 2.1 几何生成</span></div>
     <div class="files">
-      <label class="file">导入轨迹 JSON <input id="trajectory-file" type="file" accept=".json,application/json"></label>
-      <label class="file">导入 Mesh GLB <input id="mesh-file" type="file" accept=".glb,model/gltf-binary"></label>
+      <label class="file merge-only">导入轨迹 JSON <input id="trajectory-file" type="file" accept=".json,application/json"></label>
+      <label class="file merge-only">导入 Mesh GLB <input id="mesh-file" type="file" accept=".glb,model/gltf-binary"></label>
       <button id="screenshot">保存截图</button>
     </div>
   </header>
   <section class="intro">
     <h1>去噪中的 Token 空间轨迹</h1>
-    <p>沿时间步观察位置预测，再把 Morton 序列映射回三维点云，查看排序邻域和实际合并组。</p>
+    <p class="merge-only">沿时间步观察位置预测，再把 Morton 序列映射回三维点云，查看排序邻域和实际合并组。</p>
+    <p class="native-only">拖动时间轴，观察 Native DiT 每一步对 4,096 个 token 的三维位置预测。</p>
   </section>
   <main>
     <section class="panel viewer-panel">
       <div class="panel-title">
-        <div><strong id="case-title">导入轨迹以开始</strong></div>
+        <div><strong id="case-title">加载轨迹</strong></div>
         <span id="method-label"></span>
       </div>
       <div class="controls timeline">
         <div class="control-row">
           <button id="play">▶ 播放</button>
           <button id="reset">↺ 重置视角</button>
-          <label>Step <select id="step-select"></select></label>
-          <label>Layer <select id="layer-select"></select></label>
-          <label>坐标 <select id="position-source">
+          <label id="case-picker" hidden>样例 <select id="case-select"></select></label>
+          <label>去噪步 <select id="step-select"></select></label>
+          <label class="merge-only">Layer <select id="layer-select"></select></label>
+          <label class="merge-only">坐标 <select id="position-source">
             <option value="used">合并时使用的位置</option>
             <option value="current">当前步的预测位置</option>
           </select></label>
-          <label>着色 <select id="color-mode">
+          <label class="merge-only">着色 <select id="color-mode">
             <option value="morton">Morton 排名</option>
             <option value="group">实际合并组</option>
           </select></label>
@@ -49,7 +51,7 @@
         <input type="range" id="step-slider" min="0" max="49" value="0" aria-label="去噪步时间轴">
       </div>
       <div id="scene"></div>
-      <div id="order-panel" class="order-panel" hidden>
+      <div id="order-panel" class="order-panel merge-only" hidden>
         <div class="order-heading"><strong>Morton 序列</strong><span id="order-source"></span></div>
         <canvas id="order-strip" role="img" aria-label="Morton 排序渐变"></canvas>
         <div class="order-ends"><span>首位</span><span>末位</span></div>
@@ -57,11 +59,11 @@
       </div>
       <div class="controls">
         <div class="control-row wrap">
-          <label><input type="checkbox" id="show-tokens" checked> 原始 token</label>
-          <label><input type="checkbox" id="show-reps"> 代表 token</label>
-          <label><input type="checkbox" id="show-mesh" checked> 最终 Mesh</label>
-          <label><input type="checkbox" id="show-lines" checked> 选中组合并连线</label>
-          <label><input type="checkbox" id="only-group"> 仅显示选中组</label>
+          <label class="merge-only"><input type="checkbox" id="show-tokens" checked> 原始 token</label>
+          <label class="merge-only"><input type="checkbox" id="show-reps"> 代表 token</label>
+          <label class="merge-only"><input type="checkbox" id="show-mesh" checked> 最终 Mesh</label>
+          <label class="merge-only"><input type="checkbox" id="show-lines" checked> 选中组合并连线</label>
+          <label class="merge-only"><input type="checkbox" id="only-group"> 仅显示选中组</label>
           <label><input type="checkbox" id="auto-rotate"> 自动旋转</label>
           <label>点大小 <input type="range" id="point-size" min="1" max="10" value="4"></label>
         </div>
@@ -71,20 +73,20 @@
       <div class="panel-title"><strong>当前帧</strong></div>
       <div class="metrics">
         <div><small>去噪 Step</small><strong id="stat-step">—</strong></div>
-        <div><small>DiT Layer</small><strong id="stat-layer">—</strong></div>
+        <div class="merge-only"><small>DiT Layer</small><strong id="stat-layer">—</strong></div>
         <div><small>Token 数</small><strong id="stat-n">—</strong></div>
-        <div><small>合并后 K</small><strong id="stat-k">—</strong></div>
+        <div class="merge-only"><small>合并后 K</small><strong id="stat-k">—</strong></div>
       </div>
-      <div class="info-section"><h3>当前分组</h3><p id="plan-info" class="muted">导入记录后查看</p></div>
-      <div class="info-section"><h3>选中的 token / group</h3><p id="selection-info" class="muted">点击三维点，查看属于同一组的所有 token。</p></div>
-      <div class="info-section"><h3>解释与限制</h3>
+      <div class="info-section merge-only"><h3>当前分组</h3><p id="plan-info" class="muted">导入记录后查看</p></div>
+      <div class="info-section"><h3>选中的 token</h3><p id="selection-info" class="muted">点击三维点查看 token。</p></div>
+      <div class="info-section merge-only"><h3>解释与限制</h3>
         <p id="position-note" class="note">“合并时使用的位置”可能来自更早的 step，而不是当前去噪步。</p>
         <p class="note">Soft 合并按最大展开权重显示主归属。最终网格提供空间参照，生成 token 缺少逐点真值。</p>
       </div>
       <div id="status" role="status">加载中…</div>
     </aside>
   </main>
-  <footer>拖动旋转 · 滚轮缩放 · 点击点云查看 token · 点击色带查看排序邻域</footer>
+  <footer>拖动旋转 · 滚轮缩放 · 点击点云查看 token<span class="merge-only"> · 点击色带查看排序邻域</span></footer>
   <script type="module" src="./app.js"></script>
 </body>
 </html>

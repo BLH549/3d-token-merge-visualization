@@ -3,6 +3,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
 const $ = (id) => document.getElementById(id);
+const nativeOnly = document.body.dataset.view === "native";
 const sceneHost = $("scene");
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -21,7 +22,8 @@ scene.add(new THREE.HemisphereLight(0xffffff, 0x8d847b, 1.7));
 const light = new THREE.DirectionalLight(0xffffff, 2);
 light.position.set(3, 4, 6);
 scene.add(light);
-scene.add(new THREE.AxesHelper(0.16));
+if (!nativeOnly) scene.add(new THREE.AxesHelper(0.16));
+if (nativeOnly) $("point-size").value = "2";
 
 let trace = null;
 let frames = [];
@@ -93,6 +95,7 @@ function validate(input) {
     if (!f.predicted_positions.every(p => Array.isArray(p) && p.length === 3 && p.every(Number.isFinite))) {
       throw new Error("Step " + f.step + " 的位置包含 NaN 或无效值");
     }
+    if (nativeOnly) continue;
     if (f.prediction_morton_order != null) validateOrder(f.prediction_morton_order, tokenCount);
     if (!f.layers || typeof f.layers !== "object") throw new Error("Missing layer snapshots");
     for (const [layer, snap] of Object.entries(f.layers)) {
@@ -113,6 +116,10 @@ function validate(input) {
             tokenCount % snap.stripe_count !== 0) throw new Error("排序分段的数量无效");
       }
     }
+  }
+  if (nativeOnly && (input.source?.method !== "native" || seen.size !== 50 ||
+      input.frames.some(f => f.step < 0 || f.step >= 50))) {
+    throw new Error("需要完整的 50 步 Native 位置预测");
   }
 }
 
@@ -160,7 +167,8 @@ function resetCamera(positions) {
   const center = box.getCenter(new THREE.Vector3());
   worldSpan = Math.max(size.x, size.y, size.z, 0.2);
   defaultTarget.copy(center);
-  defaultCam.copy(center).add(new THREE.Vector3(worldSpan * 1.2, worldSpan * 0.65, worldSpan * 1.48));
+  const viewOffset = new THREE.Vector3(1.2, 0.65, 1.48);
+  defaultCam.copy(center).addScaledVector(viewOffset, worldSpan * (nativeOnly ? 0.78 : 1));
   controls.target.copy(defaultTarget);
   camera.position.copy(defaultCam);
   camera.near = Math.max(0.0005, worldSpan / 2500);
@@ -208,6 +216,7 @@ function setPoints(positions, snap, order) {
   pointCloud.computeBoundingSphere();
   if (pointCloud.instanceColor) pointCloud.instanceColor.needsUpdate = true;
   pointCloud.visible = $("show-tokens").checked;
+  if (nativeOnly) return;
 
   if (representativeCloud) scene.remove(representativeCloud);
   const representatives = snap?.representatives || [];
@@ -301,8 +310,14 @@ function drawOrder() {
 
 function updateMetrics(frame, snap, note) {
   $("stat-step").textContent = frame.step + 1;
-  $("stat-layer").textContent = $("layer-select").disabled ? "—" : $("layer-select").value;
   $("stat-n").textContent = trace.token_count;
+  if (nativeOnly) {
+    $("selection-info").textContent = selectedToken == null ? "点击三维点查看预测坐标。" :
+      "Token #" + selectedToken + " · XYZ (" +
+        frame.predicted_positions[selectedToken].map(value => value.toFixed(4)).join(", ") + ")";
+    return;
+  }
+  $("stat-layer").textContent = $("layer-select").disabled ? "—" : $("layer-select").value;
   $("stat-k").textContent = snap ? snap.group_count : trace.token_count;
   $("position-note").textContent = note;
   if (snap) {
@@ -342,10 +357,10 @@ function updateMetrics(frame, snap, note) {
 function drawFrame() {
   if (!trace) return;
   const frame = frames[frameIndex];
-  const snap = frame.layers[$("layer-select").value] || null;
+  const snap = nativeOnly ? null : frame.layers?.[$("layer-select").value] || null;
   const { frame: displayedFrame, note } = positionData(frame, snap);
   const positions = displayedFrame.predicted_positions;
-  shownOrder = mortonData(frame, snap, displayedFrame);
+  shownOrder = nativeOnly ? null : mortonData(frame, snap, displayedFrame);
   if (selectedToken != null && selectedToken >= positions.length) selectedToken = null;
   setPoints(positions, snap, shownOrder);
   drawOrder();
@@ -359,13 +374,13 @@ async function loadTrace(input, name) {
   validate(input);
   stopPlayback();
   trace = input;
-  prepareRankColors(trace.token_count);
+  if (!nativeOnly) prepareRankColors(trace.token_count);
   frames = [...input.frames].sort((a, b) => a.step - b.step);
   frameIndex = frames.length - 1;
   selectedToken = null;
   selectedStripe = null;
   $("case-title").textContent = name || input.source?.run_id || "Trajectory";
-  $("method-label").textContent = input.source?.method || "unknown method";
+  $("method-label").textContent = nativeOnly ? "Native" : input.source?.method || "unknown method";
   $("step-slider").max = frames.length - 1;
   $("step-select").replaceChildren();
   for (const [index, f] of frames.entries()) {
@@ -375,7 +390,7 @@ async function loadTrace(input, name) {
     $("step-select").append(opt);
   }
   const layerIds = new Set();
-  for (const f of frames) for (const layer of Object.keys(f.layers)) layerIds.add(Number(layer));
+  for (const f of frames) for (const layer of Object.keys(f.layers || {})) layerIds.add(Number(layer));
   for (const layer of input.source?.layers ?? []) layerIds.add(layer);
   $("layer-select").replaceChildren();
   for (const layer of [...layerIds].sort((a, b) => a - b)) {
@@ -385,7 +400,7 @@ async function loadTrace(input, name) {
     $("layer-select").append(opt);
   }
   const firstRecordedLayer = [...layerIds].sort((a, b) => a - b)
-    .find(l => frames.some(f => f.layers[String(l)]));
+    .find(l => frames.some(f => f.layers?.[String(l)]));
   $("layer-select").value = firstRecordedLayer?.toString() ?? ($("layer-select").options[0]?.value || "");
   $("layer-select").disabled = firstRecordedLayer == null;
   resetCamera(frames[frameIndex].predicted_positions);
@@ -472,7 +487,10 @@ $("play").addEventListener("click", () => {
   }, 380);
 });
 $("reset").addEventListener("click", () => {
-  if (trace) { resetCamera(frames[frameIndex].predicted_positions); drawFrame(); }
+  if (!trace) return;
+  const reference = nativeOnly ? frames.at(-1) : frames[frameIndex];
+  resetCamera(reference.predicted_positions);
+  drawFrame();
 });
 $("screenshot").addEventListener("click", () => {
   renderer.render(scene, camera);
@@ -501,8 +519,8 @@ $("screenshot").addEventListener("click", () => {
     ctx.fillText("末位", output.width - margin, top + 37);
   }
   const link = document.createElement("a");
-  link.download = "merge-step-" + (step ?? "empty") +
-                  "-layer-" + $("layer-select").value + ".png";
+  link.download = nativeOnly ? "native-position-step-" + (step ?? "empty") + ".png" :
+    "merge-step-" + (step ?? "empty") + "-layer-" + $("layer-select").value + ".png";
   link.href = output.toDataURL("image/png");
   link.click();
 });
@@ -542,20 +560,45 @@ function animate() {
 }
 animate();
 
+async function loadBundledTrace(entry) {
+  const response = await fetch(entry.trajectory, { cache: "no-cache" });
+  if (!response.ok) throw new Error("轨迹文件 HTTP " + response.status);
+  await loadTrace(await response.json(), entry.name || "Research case");
+}
+
 (async () => {
   try {
     const response = await fetch("./data/manifest.json", { cache: "no-cache" });
     if (!response.ok) throw new Error("No bundled manifest");
     const manifest = await response.json();
-    const traceResponse = await fetch(manifest.trajectory, { cache: "no-cache" });
-    if (!traceResponse.ok) throw new Error("轨迹文件 HTTP " + traceResponse.status);
-    await loadTrace(await traceResponse.json(), manifest.name || "Research case");
-    if (manifest.mesh) {
+    await loadBundledTrace(manifest);
+    if (nativeOnly && manifest.cases?.length > 1) {
+      const picker = $("case-select");
+      manifest.cases.forEach((entry, index) => picker.add(new Option(entry.name, String(index))));
+      $("case-picker").hidden = false;
+      let loadedCase = picker.value;
+      picker.addEventListener("change", async () => {
+        stopPlayback();
+        picker.disabled = true;
+        status("正在加载位置轨迹…");
+        try {
+          await loadBundledTrace(manifest.cases[Number(picker.value)]);
+          loadedCase = picker.value;
+        } catch (err) {
+          picker.value = loadedCase;
+          status("样例读取失败：" + err.message, true);
+        } finally {
+          picker.disabled = false;
+        }
+      });
+    }
+    if (!nativeOnly && manifest.mesh) {
       try { await loadMesh(manifest.mesh); }
       catch (err) { status("轨迹已加载，但参考 Mesh 加载失败：" + err.message, true); }
     }
   } catch (err) {
-    status("未加载内置轨迹。可导入 merge-trajectory.json。" +
-      (err.message === "No bundled manifest" ? "" : " " + err.message));
+    status(nativeOnly ? "位置轨迹读取失败：" + err.message :
+      "未加载内置轨迹。可导入 merge-trajectory.json。" +
+      (err.message === "No bundled manifest" ? "" : " " + err.message), nativeOnly);
   }
 })();

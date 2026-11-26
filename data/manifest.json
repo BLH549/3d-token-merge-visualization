@@ -1,5 +1,15 @@
 {
-  "name": "test-30 · Morton",
+  "name": "自行车 · object-26",
   "trajectory": "./data/merge-trajectory.json",
-  "mesh": "./data/mesh.glb"
+  "mesh": null,
+  "cases": [
+    {
+      "name": "自行车 · object-26",
+      "trajectory": "./data/merge-trajectory.json"
+    },
+    {
+      "name": "object-22",
+      "trajectory": "./data/native-case-2.json"
+    }
+  ]
 }
